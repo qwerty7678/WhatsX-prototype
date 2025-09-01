@@ -54,10 +54,10 @@ function requireAdmin(req, res, next) {
 // Health
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
-// Templates CRUD (admin can create/update/delete; read allowed for authenticated users)
-app.get('/api/templates', verifyFirebaseToken, async (req, res) => {
+// Templates CRUD: read allowed for any authenticated user; write restricted to admins
+app.get('/api/templates', verifyFirebaseToken, async (_req, res) => {
   try {
-    const snap = await db.collection('templates').where('userId', '==', req.user.uid).get();
+    const snap = await db.collection('templates').get();
     const templates = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     res.json(templates);
   } catch (e) {
@@ -65,7 +65,7 @@ app.get('/api/templates', verifyFirebaseToken, async (req, res) => {
   }
 });
 
-app.post('/api/templates', verifyFirebaseToken, async (req, res) => {
+app.post('/api/templates', verifyFirebaseToken, requireAdmin, async (req, res) => {
   try {
     const { name, body, variables } = req.body;
     const docRef = await db.collection('templates').add({
@@ -82,14 +82,13 @@ app.post('/api/templates', verifyFirebaseToken, async (req, res) => {
   }
 });
 
-app.put('/api/templates/:id', verifyFirebaseToken, async (req, res) => {
+app.put('/api/templates/:id', verifyFirebaseToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { name, body, variables } = req.body;
     const ref = db.collection('templates').doc(id);
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: 'Not found' });
-    if (doc.data().userId !== req.user.uid) return res.status(403).json({ error: 'Forbidden' });
     await ref.update({
       name,
       body,
@@ -103,13 +102,12 @@ app.put('/api/templates/:id', verifyFirebaseToken, async (req, res) => {
   }
 });
 
-app.delete('/api/templates/:id', verifyFirebaseToken, async (req, res) => {
+app.delete('/api/templates/:id', verifyFirebaseToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const ref = db.collection('templates').doc(id);
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: 'Not found' });
-    if (doc.data().userId !== req.user.uid) return res.status(403).json({ error: 'Forbidden' });
     await ref.delete();
     res.status(204).end();
   } catch (e) {
@@ -134,6 +132,15 @@ app.post('/api/admin/users', verifyFirebaseToken, requireAdmin, async (req, res)
     if (makeAdmin) {
       await adminAuth.setCustomUserClaims(user.uid, { admin: true });
     }
+    // Sync Firestore users collection
+    const role = makeAdmin ? 'admin' : 'user';
+    await db.collection('users').doc(user.uid).set({
+      uid: user.uid,
+      email: user.email,
+      displayName: user.displayName || '',
+      role,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
     res.status(201).json({ uid: user.uid, email: user.email, displayName: user.displayName });
   } catch (e) {
     res.status(500).json({ error: 'Failed to create user' });
@@ -148,6 +155,15 @@ app.put('/api/admin/users/:uid', verifyFirebaseToken, requireAdmin, async (req, 
     if (typeof setAdmin === 'boolean') {
       await adminAuth.setCustomUserClaims(uid, { admin: setAdmin });
     }
+    // Update Firestore users collection
+    const userDoc = db.collection('users').doc(uid);
+    await userDoc.set({
+      uid,
+      email: user.email,
+      displayName: user.displayName || '',
+      role: setAdmin ? 'admin' : 'user',
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
     res.json({ uid: user.uid, email: user.email, displayName: user.displayName });
   } catch (e) {
     res.status(500).json({ error: 'Failed to update user' });
@@ -158,6 +174,7 @@ app.delete('/api/admin/users/:uid', verifyFirebaseToken, requireAdmin, async (re
   try {
     const { uid } = req.params;
     await adminAuth.deleteUser(uid);
+    await db.collection('users').doc(uid).delete();
     res.status(204).end();
   } catch (e) {
     res.status(500).json({ error: 'Failed to delete user' });
@@ -168,18 +185,24 @@ app.delete('/api/admin/users/:uid', verifyFirebaseToken, requireAdmin, async (re
 app.post('/api/send-message', verifyFirebaseToken, async (req, res) => {
   try {
     const { toNumbers, messageText } = req.body;
-    const uniqueNumbers = Array.from(new Set((toNumbers || []).map(String)));
+    const inputNumbers = (toNumbers || []).map(String);
+    const uniqueNumbers = Array.from(new Set(inputNumbers));
+    const duplicatesRemoved = Math.max(0, inputNumbers.length - uniqueNumbers.length);
     const payload = {
       from: `whatsapp:${process.env.TWILIO_WHATSAPP_FROM}`,
       body: messageText,
     };
+    console.log('Message would be sent to:', uniqueNumbers);
+    if (duplicatesRemoved > 0) {
+      console.log(`Duplicates removed: ${duplicatesRemoved}`);
+    }
     // Prototype: do not actually send unless env ALLOW_SEND === 'true'
     if (process.env.ALLOW_SEND === 'true' && twilioClient) {
       const responses = await Promise.all(uniqueNumbers.map((num) => twilioClient.messages.create({ ...payload, to: `whatsapp:${num}` })));
-      return res.json({ sent: responses.length, uniqueNumbers, responses: responses.map((r) => ({ sid: r.sid })) });
+      return res.json({ sent: responses.length, uniqueNumbers, duplicatesRemoved, responses: responses.map((r) => ({ sid: r.sid })) });
     }
     // Simulate
-    return res.json({ sent: 0, uniqueNumbers, simulated: true });
+    return res.json({ sent: 0, uniqueNumbers, duplicatesRemoved, simulated: true });
   } catch (e) {
     res.status(500).json({ error: 'Failed to process message request' });
   }
