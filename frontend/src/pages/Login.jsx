@@ -6,6 +6,7 @@ export default function Login({ onLogin }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
+  const isDemo = import.meta.env.VITE_DEMO_MODE === 'true'
 
   async function handleEmailLogin(e) {
     e.preventDefault()
@@ -39,6 +40,11 @@ export default function Login({ onLogin }) {
           <button className="w-full bg-indigo-600 hover:bg-indigo-700 text-white rounded px-3 py-2">Sign in</button>
         </form>
         <button onClick={handleGoogle} className="w-full border rounded px-3 py-2">Continue with Google</button>
+        {isDemo && (
+          <div className="text-xs text-gray-600">
+            Demo mode: backend accepts <code>X-Demo-User: admin</code> or <code>X-Demo-User: user</code>.
+          </div>
+        )}
       </div>
     </div>
   )

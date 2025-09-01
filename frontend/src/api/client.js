@@ -11,6 +11,10 @@ api.interceptors.request.use(async (config) => {
     const token = await currentUser.getIdToken()
     config.headers.Authorization = `Bearer ${token}`
   }
+  if (import.meta.env.VITE_DEMO_MODE === 'true') {
+    const demoRole = localStorage.getItem('demoRole') || 'user'
+    config.headers['X-Demo-User'] = demoRole
+  }
   return config
 })
 

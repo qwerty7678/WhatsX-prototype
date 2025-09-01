@@ -2,5 +2,5 @@
 > server@1.0.0 start
 > node index.js
 
-[dotenv@17.2.1] injecting env (0) from .env -- tip: ⚙️  override existing env vars with { override: true }
+[dotenv@17.2.1] injecting env (2) from .env -- tip: 📡 auto-backup env with Radar: https://dotenvx.com/radar
 API listening on :4000

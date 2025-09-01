@@ -31,6 +31,11 @@ app.use(express.json());
 
 // Middleware: Verify Firebase ID token and attach user
 async function verifyFirebaseToken(req, res, next) {
+  if (process.env.DEMO_MODE === 'true') {
+    const role = (req.headers['x-demo-user'] || 'user').toString() === 'admin' ? 'admin' : 'user';
+    req.user = { uid: role === 'admin' ? 'demo-admin' : 'demo-user', admin: role === 'admin' };
+    return next();
+  }
   const authHeader = req.headers.authorization || '';
   const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
   if (!idToken) {
@@ -118,6 +123,11 @@ app.delete('/api/templates/:id', verifyFirebaseToken, requireAdmin, async (req, 
 // Admin: Manage users via Firebase Admin SDK
 app.get('/api/admin/users', verifyFirebaseToken, requireAdmin, async (_req, res) => {
   try {
+    if (process.env.DEMO_MODE === 'true') {
+      const snap = await db.collection('users').get();
+      const users = snap.docs.map((d) => d.data());
+      return res.json(users);
+    }
     const list = await adminAuth.listUsers(1000);
     res.json(list.users.map((u) => ({ uid: u.uid, email: u.email, displayName: u.displayName, disabled: u.disabled })));
   } catch (e) {
@@ -128,19 +138,24 @@ app.get('/api/admin/users', verifyFirebaseToken, requireAdmin, async (_req, res)
 app.post('/api/admin/users', verifyFirebaseToken, requireAdmin, async (req, res) => {
   try {
     const { email, password, displayName, admin: makeAdmin } = req.body;
+    if (process.env.DEMO_MODE === 'true') {
+      const uid = `demo-${Date.now()}`;
+      const role = makeAdmin ? 'admin' : 'user';
+      await db.collection('users').doc(uid).set({
+        uid,
+        email,
+        displayName: displayName || '',
+        role,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      return res.status(201).json({ uid, email, displayName });
+    }
     const user = await adminAuth.createUser({ email, password, displayName });
     if (makeAdmin) {
       await adminAuth.setCustomUserClaims(user.uid, { admin: true });
     }
-    // Sync Firestore users collection
     const role = makeAdmin ? 'admin' : 'user';
-    await db.collection('users').doc(user.uid).set({
-      uid: user.uid,
-      email: user.email,
-      displayName: user.displayName || '',
-      role,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
+    await db.collection('users').doc(user.uid).set({ uid: user.uid, email: user.email, displayName: user.displayName || '', role, createdAt: admin.firestore.FieldValue.serverTimestamp() });
     res.status(201).json({ uid: user.uid, email: user.email, displayName: user.displayName });
   } catch (e) {
     res.status(500).json({ error: 'Failed to create user' });
@@ -151,19 +166,17 @@ app.put('/api/admin/users/:uid', verifyFirebaseToken, requireAdmin, async (req, 
   try {
     const { uid } = req.params;
     const { email, password, displayName, admin: setAdmin } = req.body;
+    if (process.env.DEMO_MODE === 'true') {
+      const userDoc = db.collection('users').doc(uid);
+      await userDoc.set({ uid, email, displayName: displayName || '', role: setAdmin ? 'admin' : 'user', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      return res.json({ uid, email, displayName });
+    }
     const user = await adminAuth.updateUser(uid, { email, password, displayName });
     if (typeof setAdmin === 'boolean') {
       await adminAuth.setCustomUserClaims(uid, { admin: setAdmin });
     }
-    // Update Firestore users collection
     const userDoc = db.collection('users').doc(uid);
-    await userDoc.set({
-      uid,
-      email: user.email,
-      displayName: user.displayName || '',
-      role: setAdmin ? 'admin' : 'user',
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
+    await userDoc.set({ uid, email: user.email, displayName: user.displayName || '', role: setAdmin ? 'admin' : 'user', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
     res.json({ uid: user.uid, email: user.email, displayName: user.displayName });
   } catch (e) {
     res.status(500).json({ error: 'Failed to update user' });
@@ -173,6 +186,10 @@ app.put('/api/admin/users/:uid', verifyFirebaseToken, requireAdmin, async (req, 
 app.delete('/api/admin/users/:uid', verifyFirebaseToken, requireAdmin, async (req, res) => {
   try {
     const { uid } = req.params;
+    if (process.env.DEMO_MODE === 'true') {
+      await db.collection('users').doc(uid).delete();
+      return res.status(204).end();
+    }
     await adminAuth.deleteUser(uid);
     await db.collection('users').doc(uid).delete();
     res.status(204).end();
